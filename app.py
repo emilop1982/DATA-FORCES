@@ -277,7 +277,8 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown(f"<hr style='border-color:{PALETTE[\"border\"]}; margin:10px 0;'>", unsafe_allow_html=True)
+    border_color = PALETTE["border"]
+    st.markdown(f"<hr style='border-color:{border_color}; margin:10px 0;'>", unsafe_allow_html=True)
 
     page = st.radio("", [
         "Home",
@@ -297,7 +298,8 @@ with st.sidebar:
         "About",
     ], label_visibility="collapsed")
 
-    st.markdown(f"<hr style='border-color:{PALETTE[\"border\"]}; margin:10px 0;'>", unsafe_allow_html=True)
+    border_color = PALETTE["border"]
+    st.markdown(f"<hr style='border-color:{border_color}; margin:10px 0;'>", unsafe_allow_html=True)
     st.markdown(f"""
     <div style="font-size:0.65rem; color:{PALETTE['text_muted']}; line-height:1.5; text-align:center;">
     98,651,403 observations<br>
