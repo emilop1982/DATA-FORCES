@@ -1,672 +1,570 @@
 """
-DATA FORCES — Explorer v2
-Productive Data Infrastructure for Global South Research
-Dependency Lab — Tricontinental / IdIHCS-UNLP/CONICET
+DATA FORCES — Data Catalog & Explorer v5
+Organized metadata navigation. Charts only in Analysis tab.
+Connected to local DuckDB (98.6M observations).
 """
 import streamlit as st
-from supabase import create_client
+import duckdb
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import base64
 import os
-from topics import TOPICS, COUNTRY_PRESETS, get_topic_indicators
+
+DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'dataforces.duckdb')
+P = {"bg":"#0a0e1a","sidebar":"#0f172a","accent":"#00d4aa","text":"#e2e8f0",
+     "muted":"#94a3b8","card":"#1e293b","border":"#334155",
+     "core":"#2563eb","semi":"#f59e0b","periphery":"#dc2626"}
+COLORS = ["#00d4aa","#1e88e5","#f59e0b","#ef4444","#8b5cf6","#06b6d4",
+          "#f97316","#22c55e","#ec4899","#a855f7"]
+
+st.set_page_config(page_title="DATA FORCES — Catalog", layout="wide", initial_sidebar_state="expanded")
+
+st.markdown(f"""<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+.stApp{{background:{P["bg"]};color:{P["text"]};font-family:'Inter',sans-serif}}
+.block-container{{padding-top:.8rem;max-width:1400px}}
+h1{{font-size:1.7rem!important;font-weight:700!important;color:{P["accent"]}!important}}
+h2{{font-size:1.15rem!important;font-weight:600!important;border-bottom:1px solid {P["border"]};padding-bottom:.25rem;margin-top:1rem}}
+h3{{font-size:.95rem!important;color:{P["accent"]}!important}}
+section[data-testid="stSidebar"]{{background:{P["sidebar"]}}}
+section[data-testid="stSidebar"] *{{color:{P["text"]}!important}}
+div[data-testid="stMetric"]{{background:{P["card"]};border:1px solid {P["border"]};border-radius:8px;padding:8px 12px}}
+div[data-testid="stMetric"] label{{color:{P["muted"]}!important;font-size:.7rem!important}}
+div[data-testid="stMetric"] div[data-testid="stMetricValue"]{{color:{P["accent"]}!important;font-size:1.1rem!important}}
+details{{background:{P["card"]}!important;border:1px solid {P["border"]}!important;border-radius:6px!important;margin-bottom:4px!important}}
+.stDataFrame{{font-size:.85rem}}
+</style>""", unsafe_allow_html=True)
 
 # =====================================================================
-# CONFIG
-# =====================================================================
-SUPABASE_URL = "https://gpndcspvuewxrkefqewc.supabase.co"
-SUPABASE_KEY = "sb_secret_2boRe6vDplEzl0eQFphz4w_28p1GmhT"
-
-# Color palette from Sur Global Hero image
-PALETTE = {
-    "bg_dark": "#0a0e1a",
-    "bg_sidebar": "#0f172a",
-    "accent": "#00d4aa",
-    "accent2": "#1e88e5",
-    "gold": "#f0c040",
-    "text": "#e2e8f0",
-    "text_muted": "#94a3b8",
-    "card_bg": "#1e293b",
-    "border": "#334155",
-    "core": "#2563eb",
-    "semi": "#f59e0b",
-    "periphery": "#dc2626",
-}
-
-PLOTLY_TEMPLATE = {
-    "layout": {
-        "paper_bgcolor": "rgba(0,0,0,0)",
-        "plot_bgcolor": "rgba(0,0,0,0)",
-        "font": {"color": "#e2e8f0", "family": "Inter, system-ui, sans-serif"},
-        "xaxis": {"gridcolor": "#1e293b", "zerolinecolor": "#334155"},
-        "yaxis": {"gridcolor": "#1e293b", "zerolinecolor": "#334155"},
-        "colorway": ["#00d4aa", "#1e88e5", "#f59e0b", "#ef4444", "#8b5cf6",
-                      "#06b6d4", "#f97316", "#22c55e", "#ec4899", "#a855f7"],
-    }
-}
-
-st.set_page_config(
-    page_title="DATA FORCES",
-    page_icon="",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# =====================================================================
-# CSS — Sur Global Hero aesthetic
-# =====================================================================
-st.markdown(f"""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-    .stApp {{
-        background-color: {PALETTE["bg_dark"]};
-        color: {PALETTE["text"]};
-        font-family: 'Inter', system-ui, sans-serif;
-    }}
-
-    .block-container {{
-        padding-top: 1rem;
-        padding-bottom: 1rem;
-        max-width: 1400px;
-    }}
-
-    h1 {{
-        font-size: 2rem !important;
-        font-weight: 700 !important;
-        color: {PALETTE["accent"]} !important;
-        letter-spacing: -0.5px;
-    }}
-
-    h2 {{
-        font-size: 1.3rem !important;
-        font-weight: 600 !important;
-        color: {PALETTE["text"]} !important;
-        border-bottom: 1px solid {PALETTE["border"]};
-        padding-bottom: 0.4rem;
-    }}
-
-    h3 {{
-        font-size: 1.05rem !important;
-        font-weight: 600 !important;
-        color: {PALETTE["accent"]} !important;
-    }}
-
-    /* Sidebar */
-    section[data-testid="stSidebar"] {{
-        background-color: {PALETTE["bg_sidebar"]};
-        border-right: 1px solid {PALETTE["border"]};
-    }}
-    section[data-testid="stSidebar"] * {{
-        color: {PALETTE["text"]} !important;
-    }}
-    section[data-testid="stSidebar"] .stRadio label:hover {{
-        color: {PALETTE["accent"]} !important;
-    }}
-
-    /* Metrics */
-    div[data-testid="stMetric"] {{
-        background: {PALETTE["card_bg"]};
-        border: 1px solid {PALETTE["border"]};
-        border-radius: 10px;
-        padding: 14px 18px;
-    }}
-    div[data-testid="stMetric"] label {{
-        color: {PALETTE["text_muted"]} !important;
-        font-size: 0.8rem !important;
-    }}
-    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {{
-        color: {PALETTE["accent"]} !important;
-        font-weight: 700 !important;
-    }}
-
-    /* Expanders */
-    details {{
-        background: {PALETTE["card_bg"]} !important;
-        border: 1px solid {PALETTE["border"]} !important;
-        border-radius: 8px !important;
-    }}
-    details summary {{
-        color: {PALETTE["text"]} !important;
-    }}
-
-    /* Dataframes */
-    .stDataFrame {{
-        border: 1px solid {PALETTE["border"]};
-        border-radius: 8px;
-    }}
-
-    /* Selectbox, inputs */
-    div[data-baseweb="select"] {{
-        background: {PALETTE["card_bg"]};
-    }}
-
-    /* Tabs */
-    .stTabs [data-baseweb="tab"] {{
-        color: {PALETTE["text_muted"]};
-    }}
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {{
-        color: {PALETTE["accent"]};
-        border-bottom-color: {PALETTE["accent"]};
-    }}
-
-    /* Topic cards */
-    .topic-card {{
-        background: {PALETTE["card_bg"]};
-        border: 1px solid {PALETTE["border"]};
-        border-radius: 12px;
-        padding: 20px;
-        margin: 8px 0;
-        transition: border-color 0.2s;
-    }}
-    .topic-card:hover {{
-        border-color: {PALETTE["accent"]};
-    }}
-    .topic-card h4 {{
-        margin: 0 0 4px 0;
-        color: {PALETTE["text"]};
-        font-size: 1.1rem;
-    }}
-    .topic-card p {{
-        margin: 0;
-        color: {PALETTE["text_muted"]};
-        font-size: 0.85rem;
-    }}
-
-    /* Hero section */
-    .hero-container {{
-        position: relative;
-        border-radius: 12px;
-        overflow: hidden;
-        margin-bottom: 1.5rem;
-    }}
-    .hero-overlay {{
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        padding: 30px;
-        background: linear-gradient(transparent, rgba(10,14,26,0.95));
-    }}
-    .hero-title {{
-        font-size: 2.5rem;
-        font-weight: 700;
-        color: {PALETTE["accent"]};
-        margin: 0;
-        text-shadow: 0 2px 8px rgba(0,0,0,0.5);
-    }}
-    .hero-subtitle {{
-        font-size: 1rem;
-        color: {PALETTE["text_muted"]};
-        margin: 4px 0 0 0;
-    }}
-
-    /* Source badge */
-    .badge {{
-        display: inline-block;
-        background: {PALETTE["border"]};
-        color: {PALETTE["text"]};
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        margin: 2px;
-    }}
-    .badge-accent {{
-        background: rgba(0,212,170,0.15);
-        color: {PALETTE["accent"]};
-        border: 1px solid rgba(0,212,170,0.3);
-    }}
-</style>
-""", unsafe_allow_html=True)
-
-
-# =====================================================================
-# SUPABASE CONNECTION
+# DB CONNECTION
 # =====================================================================
 @st.cache_resource
-def get_sb():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+def get_db():
+    return duckdb.connect(DB_PATH, read_only=True)
 
-sb = get_sb()
+db = get_db()
 
-@st.cache_data(ttl=3600)
-def load_countries():
-    r = sb.table("countries").select("*").order("country_name").execute()
-    return pd.DataFrame(r.data)
+def q(sql):
+    return db.execute(sql).fetchdf()
 
-@st.cache_data(ttl=3600)
-def load_taxonomy():
-    r = sb.table("topic_taxonomy").select("*").order("id").execute()
-    return pd.DataFrame(r.data)
-
-@st.cache_data(ttl=3600)
-def load_sources():
-    r = sb.table("sources").select("*").order("source_id").execute()
-    return pd.DataFrame(r.data)
-
-@st.cache_data(ttl=600)
-def search_catalog(term):
-    r = sb.table("indicator_catalog").select("*").ilike("indicator_name", f"%{term}%").order("country_count", desc=True).limit(100).execute()
-    return pd.DataFrame(r.data)
-
-@st.cache_data(ttl=300)
-def get_data(iso3_list, codes, yr_min=1995, yr_max=2024):
-    q = sb.table("indicators").select("iso3,year,indicator_code,indicator_name,value,source_id,value_type")
-    if len(iso3_list) == 1:
-        q = q.eq("iso3", iso3_list[0])
-    else:
-        q = q.in_("iso3", iso3_list)
-    if len(codes) == 1:
-        q = q.eq("indicator_code", codes[0])
-    else:
-        q = q.in_("indicator_code", codes)
-    q = q.gte("year", yr_min).lte("year", yr_max).order("year").limit(10000)
-    return pd.DataFrame(q.execute().data)
-
+def q1(sql):
+    return db.execute(sql).fetchone()[0]
 
 # =====================================================================
 # SIDEBAR
 # =====================================================================
 with st.sidebar:
-    # Logo area
-    st.markdown(f"""
-    <div style="text-align:center; padding: 10px 0 5px 0;">
-        <span style="font-size:1.6rem; font-weight:700; color:{PALETTE['accent']};">DATA FORCES</span><br>
-        <span style="font-size:0.7rem; color:{PALETTE['text_muted']};">Productive Data Infrastructure<br>for Global South Research</span>
-    </div>
-    """, unsafe_allow_html=True)
+    total = q1("SELECT count(*) FROM indicators") + q1("SELECT count(*) FROM bilateral") + q1("SELECT count(*) FROM commodities")
+    st.markdown(f"<div style='text-align:center;padding:6px 0'>"
+        f"<span style='font-size:1.3rem;font-weight:700;color:{P['accent']}'>DATA FORCES</span><br>"
+        f"<span style='font-size:.58rem;color:{P['muted']}'>{total:,} observations</span></div>",
+        unsafe_allow_html=True)
+    st.markdown("---")
 
-    border_color = PALETTE["border"]
-    st.markdown(f"<hr style='border-color:{border_color}; margin:10px 0;'>", unsafe_allow_html=True)
-
-    page = st.radio("", [
-        "Home",
-        "Economy",
-        "Agriculture",
-        "Energy",
-        "Education",
-        "Health",
-        "Political Analysis",
-        "Labor",
-        "Geopolitics",
-        "---",
+    section = st.radio("", [
+        "Database Overview",
         "Indicator Dictionary",
-        "Country Profile",
-        "Cross-Country",
-        "Sources",
-        "About",
+        "Browse by Topic",
+        "Browse by Source",
+        "Browse by Taxonomy",
+        "Country Data Availability",
+        "Argentina Subnational",
+        "Documents & Legislation",
+        "---",
+        "Analysis: Country Profile",
+        "Analysis: Cross-Country",
     ], label_visibility="collapsed")
 
-    border_color = PALETTE["border"]
-    st.markdown(f"<hr style='border-color:{border_color}; margin:10px 0;'>", unsafe_allow_html=True)
-    st.markdown(f"""
-    <div style="font-size:0.65rem; color:{PALETTE['text_muted']}; line-height:1.5; text-align:center;">
-    98,651,403 observations<br>
-    39 sources | 22,576 indicators<br>
-    217 countries | 16 themes<br><br>
-    Lopez, E. (2026)<br>
-    Tricontinental / IdIHCS-UNLP/CONICET
-    </div>
-    """, unsafe_allow_html=True)
-
+    st.markdown("---")
+    st.caption("Lopez, E. (2026)\nTricontinental / CONICET")
 
 # =====================================================================
-# HELPER: Topic Dashboard
+# 1. DATABASE OVERVIEW
 # =====================================================================
-def render_topic_dashboard(topic_key):
-    """Render a thematic dashboard for a given topic."""
-    topic = TOPICS[topic_key]
-    st.title(topic["label"])
-    st.caption(topic["label_es"])
+if section == "Database Overview":
+    hero = os.path.join(os.path.dirname(__file__), "assets", "hero.png")
+    if os.path.exists(hero):
+        st.image(hero, use_container_width=True)
 
-    countries = load_countries()
-    lab70 = countries[countries["in_lab70"] == True]
+    st.title("DATA FORCES")
+    st.markdown("**Productive Data Infrastructure for Global South Research**")
 
-    # Country filter
-    col1, col2, col3 = st.columns([2, 1, 1])
-    with col1:
-        preset = st.selectbox("Country group", ["Lab70 (all)"] + list(COUNTRY_PRESETS.keys()), key=f"{topic_key}_preset")
-    with col2:
-        yr_min = st.number_input("From", 1995, 2024, 2000, key=f"{topic_key}_yr_min")
-    with col3:
-        yr_max = st.number_input("To", 1995, 2024, 2022, key=f"{topic_key}_yr_max")
+    # Core metrics
+    ni = q1("SELECT count(*) FROM indicators")
+    nb = q1("SELECT count(*) FROM bilateral")
+    nc = q1("SELECT count(*) FROM commodities")
+    ncat = q1("SELECT count(*) FROM indicator_catalog")
+    nsrc = q1("SELECT count(DISTINCT source_id) FROM indicators")
+    ncountry = q1("SELECT count(*) FROM countries")
 
-    if preset == "Lab70 (all)":
-        sel_countries = lab70["iso3"].tolist()
-    else:
-        sel_countries = [c for c in COUNTRY_PRESETS.get(preset, []) if c in lab70["iso3"].tolist()]
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    c1.metric("Total observations", f"{(ni+nb+nc)/1e6:.1f}M")
+    c2.metric("Indicators cataloged", f"{ncat:,}")
+    c3.metric("Data sources", nsrc)
+    c4.metric("Countries", ncountry)
+    c5.metric("Subnational units", f"{q1('SELECT count(*) FROM subnational_units'):,}")
+    c6.metric("Documents", q1("SELECT count(*) FROM documents"))
 
-    st.markdown("---")
+    st.markdown("## Database Tables")
+    tables_data = pd.DataFrame({
+        "Table": ["indicators", "bilateral", "commodities", "indicator_catalog",
+                  "indicators_subnational", "documents", "concept", "represented_variable",
+                  "instance_variable", "topic_taxonomy", "countries", "subnational_units", "sources"],
+        "Rows": [f"{ni:,}", f"{nb:,}", f"{nc:,}", f"{ncat:,}",
+                 f"{q1('SELECT count(*) FROM indicators_subnational'):,}",
+                 f"{q1('SELECT count(*) FROM documents'):,}",
+                 f"{q1('SELECT count(*) FROM concept'):,}",
+                 f"{q1('SELECT count(*) FROM represented_variable'):,}",
+                 f"{q1('SELECT count(*) FROM instance_variable'):,}",
+                 f"{q1('SELECT count(*) FROM topic_taxonomy'):,}",
+                 f"{ncountry:,}",
+                 f"{q1('SELECT count(*) FROM subnational_units'):,}",
+                 f"{q1('SELECT count(*) FROM sources'):,}"],
+        "Description": [
+            "Country-year-indicator observations (main fact table)",
+            "Bilateral flows: trade, FDI, debt between countries",
+            "Annual commodity prices",
+            "Indicator dictionary: code, name, short_name, topic, source, coverage",
+            "Argentina subnational indicators (province, department, school level)",
+            "Legislation and policy documents metadata",
+            "DDI concepts (abstract analytical ideas)",
+            "DDI represented variables (measurement methods)",
+            "DDI instance variables (concrete columns in sources)",
+            "GSI taxonomy hierarchy (L1-L2, 75 nodes)",
+            "Country registry with classifications",
+            "Argentine provinces, departments, establishments",
+            "Data source registry",
+        ],
+    })
+    st.dataframe(tables_data, use_container_width=True, hide_index=True)
 
-    # Subtopics as tabs
-    subtopic_keys = list(topic["subtopics"].keys())
-    subtopic_labels = [topic["subtopics"][k]["label"] for k in subtopic_keys]
-    tabs = st.tabs(subtopic_labels)
+    st.markdown("## Data Quality")
+    vt = q("SELECT value_type, count(*) as n FROM indicators GROUP BY value_type ORDER BY n DESC")
+    vt["share"] = (vt["n"] / vt["n"].sum() * 100).round(2).astype(str) + "%"
+    st.dataframe(vt.rename(columns={"value_type":"Type","n":"Observations","share":"Share"}),
+        use_container_width=True, hide_index=True)
 
-    for tab, sk in zip(tabs, subtopic_keys):
-        sub = topic["subtopics"][sk]
-        indicators = sub.get("indicators", [])
+    st.markdown("## Indicator Topics")
+    topics = q("SELECT topic, count(*) as indicators FROM indicator_catalog GROUP BY topic ORDER BY indicators DESC")
+    st.dataframe(topics.rename(columns={"topic":"Topic","indicators":"Indicators"}),
+        use_container_width=True, hide_index=True)
 
-        with tab:
-            if not indicators:
-                st.info(f"Indicators for {sub['label']} are available in the local database. Browse via Indicator Dictionary.")
-                continue
-
-            codes = [c for c, n in indicators]
-            with st.spinner("Loading data..."):
-                data = get_data(sel_countries, codes, yr_min, yr_max)
-
-            if len(data) == 0:
-                st.warning("No data found for this selection.")
-                continue
-
-            data = data.merge(countries[["iso3", "country_name", "structural_pos"]], on="iso3", how="left")
-
-            # One chart per indicator
-            for code, name in indicators:
-                subset = data[data["indicator_code"] == code]
-                if len(subset) == 0:
-                    continue
-
-                st.markdown(f"### {name}")
-
-                col_chart, col_rank = st.columns([3, 1])
-
-                with col_chart:
-                    fig = px.line(
-                        subset, x="year", y="value", color="iso3",
-                        hover_data=["country_name"],
-                        color_discrete_sequence=PLOTLY_TEMPLATE["layout"]["colorway"],
-                    )
-                    fig.update_layout(
-                        height=350,
-                        margin=dict(t=10, b=30, l=50, r=10),
-                        legend=dict(orientation="h", y=-0.15, font=dict(size=9)),
-                        xaxis_title="", yaxis_title="",
-                        **{k: v for k, v in PLOTLY_TEMPLATE["layout"].items() if k not in ["colorway"]},
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-
-                with col_rank:
-                    latest = subset.sort_values("year", ascending=False).drop_duplicates("iso3")
-                    latest = latest.sort_values("value", ascending=False).head(10)
-                    st.markdown("**Top 10 (latest)**")
-                    for i, (_, row) in enumerate(latest.iterrows()):
-                        val = row["value"]
-                        val_str = f"{val:,.1f}" if abs(val) < 10000 else f"{val:,.0f}"
-                        pos = row.get("structural_pos", "")
-                        color = PALETTE.get(pos, PALETTE["text_muted"])
-                        st.markdown(f"<span style='color:{color}'>{i+1}. {row['iso3']}</span> {val_str}", unsafe_allow_html=True)
-
+    st.markdown("## Variable Cascade (DDI)")
+    cc1,cc2,cc3 = st.columns(3)
+    cc1.metric("Concepts", f"{q1('SELECT count(*) FROM concept'):,}")
+    cc2.metric("Represented Variables", f"{q1('SELECT count(*) FROM represented_variable'):,}")
+    cc3.metric("Instance Variables", f"{q1('SELECT count(*) FROM instance_variable'):,}")
+    st.caption("Every indicator traces: instance variable → represented variable → concept → taxonomy position")
 
 # =====================================================================
-# PAGES
+# 2. INDICATOR DICTIONARY
 # =====================================================================
-
-if page == "Home":
-    # Hero image
-    hero_path = os.path.join(os.path.dirname(__file__), "assets", "hero.png")
-    if os.path.exists(hero_path):
-        with open(hero_path, "rb") as f:
-            hero_b64 = base64.b64encode(f.read()).decode()
-        st.markdown(f"""
-        <div class="hero-container">
-            <img src="data:image/png;base64,{hero_b64}" style="width:100%; display:block;">
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Metrics
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Observations", "98.6M")
-    c2.metric("Sources", "39")
-    c3.metric("Indicators", "22,576")
-    c4.metric("Countries", "217")
-    c5.metric("Themes", "16")
-
-    st.markdown("---")
-
-    # Topic cards
-    st.markdown("## Explore by Topic")
-
-    cols = st.columns(4)
-    for i, (key, topic) in enumerate(TOPICS.items()):
-        with cols[i % 4]:
-            n_indicators = sum(len(s.get("indicators", [])) for s in topic["subtopics"].values())
-            n_subtopics = len(topic["subtopics"])
-            st.markdown(f"""
-            <div class="topic-card">
-                <h4 style="color:{topic['color']}">{topic['label']}</h4>
-                <p>{topic['label_es']}</p>
-                <p style="margin-top:8px;">
-                    <span class="badge">{n_subtopics} areas</span>
-                    <span class="badge badge-accent">{n_indicators} indicators</span>
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # Structural position
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("## Data Quality")
-        st.markdown(f"""
-        | Type | Observations | Share |
-        |---|---|---|
-        | Observed | 67,212,946 | 96.4% |
-        | Projected | 2,499,072 | 3.6% |
-        | Estimated | 15,082 | 0.02% |
-
-        Every observation carries a `value_type` flag.
-        """)
-
-    with col2:
-        st.markdown("## Structural Position (Lab70)")
-        countries = load_countries()
-        lab70 = countries[countries["in_lab70"] == True]
-        struct = lab70["structural_pos"].value_counts()
-
-        fig = go.Figure(data=[go.Pie(
-            labels=["Core", "Semi-periphery", "Periphery"],
-            values=[struct.get("core", 0), struct.get("semi_periphery", 0), struct.get("periphery", 0)],
-            marker_colors=[PALETTE["core"], PALETTE["semi"], PALETTE["periphery"]],
-            hole=0.5,
-            textinfo="label+value",
-            textfont=dict(color="white"),
-        )])
-        fig.update_layout(
-            height=250, margin=dict(t=5, b=5, l=5, r=5),
-            showlegend=False,
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-elif page == "---":
-    st.markdown("---")
-
-elif page in ["Economy", "Agriculture", "Energy", "Education", "Health", "Political Analysis", "Labor", "Geopolitics"]:
-    topic_map = {
-        "Economy": "economy", "Agriculture": "agriculture", "Energy": "energy",
-        "Education": "education", "Health": "health", "Political Analysis": "politics",
-        "Labor": "labor", "Geopolitics": "geopolitics",
-    }
-    render_topic_dashboard(topic_map[page])
-
-elif page == "Indicator Dictionary":
+elif section == "Indicator Dictionary":
     st.title("Indicator Dictionary")
-    st.caption("22,576 indicators from 39 sources, classified into 16 thematic domains")
+    st.caption(f"{q1('SELECT count(*) FROM indicator_catalog'):,} indicators — search by name, code, or keyword")
 
-    search = st.text_input("Search by name", placeholder="GDP, mortality, electricity, poverty...")
+    search = st.text_input("Search", placeholder="Type: GDP, mortality, electricity, poverty, renewable, education...")
 
     if search and len(search) >= 2:
-        results = search_catalog(search)
+        safe = search.replace("'", "''")
+        results = q(f"""
+            SELECT short_name, indicator_code, indicator_name, source_id, topic, unit,
+                   country_count, coverage_start, coverage_end
+            FROM indicator_catalog
+            WHERE indicator_name ILIKE '%{safe}%' OR indicator_code ILIKE '%{safe}%' OR short_name ILIKE '%{safe}%'
+            ORDER BY country_count DESC NULLS LAST
+            LIMIT 200
+        """)
+
         if len(results) > 0:
             st.success(f"{len(results)} indicators found")
-            display = results[["indicator_code", "indicator_name", "source_id", "topic",
-                               "country_count", "coverage_start", "coverage_end"]].copy()
-            display.columns = ["Code", "Name", "Source", "Theme", "Countries", "From", "To"]
-            st.dataframe(display, use_container_width=True, hide_index=True, height=400)
-
-            selected = st.selectbox("Explore indicator", results["indicator_code"].tolist(),
-                format_func=lambda x: f"{x} - {results[results['indicator_code']==x]['indicator_name'].values[0][:60]}")
-
-            if selected:
-                info = results[results["indicator_code"] == selected].iloc[0]
-                c1, c2, c3, c4 = st.columns(4)
-                c1.markdown(f"**Code:** `{info['indicator_code']}`")
-                c2.markdown(f"**Source:** `{info['source_id']}`")
-                c3.markdown(f"**Theme:** `{info['topic']}`")
-                c4.markdown(f"**Countries:** {info.get('country_count', '?')}")
-
-                countries = load_countries()
-                lab70 = countries[countries["in_lab70"] == True]
-                data = get_data(lab70["iso3"].tolist(), [selected])
-
-                if len(data) > 0:
-                    data = data.merge(countries[["iso3", "country_name", "structural_pos"]], on="iso3", how="left")
-                    fig = px.line(data, x="year", y="value", color="iso3",
-                        hover_data=["country_name"],
-                        color_discrete_sequence=PLOTLY_TEMPLATE["layout"]["colorway"])
-                    fig.update_layout(height=400, margin=dict(t=10, b=40),
-                        legend=dict(orientation="h", y=-0.15, font=dict(size=9)),
-                        xaxis_title="", yaxis_title="",
-                        **{k: v for k, v in PLOTLY_TEMPLATE["layout"].items() if k not in ["colorway"]})
-                    st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(
+                results.rename(columns={
+                    "short_name":"Short Name", "indicator_code":"Code",
+                    "indicator_name":"Full Name", "source_id":"Source",
+                    "topic":"Topic", "unit":"Unit",
+                    "country_count":"Countries", "coverage_start":"From", "coverage_end":"To"
+                }),
+                use_container_width=True, hide_index=True, height=500,
+                column_config={
+                    "Short Name": st.column_config.TextColumn(width="medium"),
+                    "Code": st.column_config.TextColumn(width="small"),
+                    "Full Name": st.column_config.TextColumn(width="large"),
+                    "Source": st.column_config.TextColumn(width="small"),
+                    "Topic": st.column_config.TextColumn(width="small"),
+                }
+            )
         else:
-            st.warning("No indicators found.")
+            st.warning("No indicators found for that search.")
+    else:
+        st.info("Type at least 2 characters. Searches across short name, code, and full name.")
 
-elif page == "Country Profile":
-    st.title("Country Profile")
-    countries = load_countries()
-    lab70 = countries[countries["in_lab70"] == True]
+        st.markdown("## Quick stats")
+        c1,c2,c3 = st.columns(3)
+        c1.metric("Total indicators", f"{q1('SELECT count(*) FROM indicator_catalog'):,}")
+        c2.metric("With short_name", f"{q1('SELECT count(*) FROM indicator_catalog WHERE short_name IS NOT NULL'):,}")
+        c3.metric("Topics", q1("SELECT count(DISTINCT topic) FROM indicator_catalog"))
 
-    selected = st.selectbox("Select country", lab70["iso3"].tolist(),
-        format_func=lambda x: f"{lab70[lab70['iso3']==x]['country_name'].values[0]} ({x})")
+# =====================================================================
+# 3. BROWSE BY TOPIC
+# =====================================================================
+elif section == "Browse by Topic":
+    st.title("Browse by Topic")
+
+    topics = q("SELECT topic, count(*) as n FROM indicator_catalog GROUP BY topic ORDER BY n DESC")
+    selected = st.selectbox("Select topic", topics["topic"].tolist(),
+        format_func=lambda x: f"{x.replace('_',' ').title()} — {topics[topics['topic']==x]['n'].values[0]:,} indicators")
 
     if selected:
-        c = lab70[lab70["iso3"] == selected].iloc[0]
-        pos = c.get("structural_pos", "")
-        color = PALETTE.get(pos, PALETTE["text_muted"])
+        indicators = q(f"""
+            SELECT short_name, indicator_code, indicator_name, source_id, unit,
+                   country_count, coverage_start, coverage_end
+            FROM indicator_catalog
+            WHERE topic = '{selected}'
+            ORDER BY country_count DESC NULLS LAST
+        """)
 
-        st.markdown(f"## {c['country_name']} <span style='color:{color}; font-size:0.9rem;'>{pos.replace('_',' ').title()}</span>",
-                    unsafe_allow_html=True)
-        st.caption(f"Region: {c['region']} | Income: {c['income_group']}")
+        st.markdown(f"## {selected.replace('_',' ').title()} — {len(indicators):,} indicators")
 
-        profiles = [
-            ("NY.GDP.PCAP.CD", "GDP per capita"), ("SP.DYN.LE00.IN", "Life expectancy"),
-            ("SH.STA.MMRT", "Maternal mortality"), ("EG.ELC.ACCS.ZS", "Electricity access"),
-            ("SL.UEM.TOTL.ZS", "Unemployment"), ("FP.CPI.TOTL.ZG", "Inflation"),
-            ("SE.SEC.ENRR", "Secondary enrollment"), ("MS.MIL.XPND.GD.ZS", "Military (% GDP)"),
-        ]
-        codes = [p[0] for p in profiles]
-        data = get_data([selected], codes, 1990, 2024)
+        # Filter by source within topic
+        sources_in_topic = sorted(indicators["source_id"].unique())
+        source_filter = st.multiselect("Filter by source", sources_in_topic, default=sources_in_topic)
+        filtered = indicators[indicators["source_id"].isin(source_filter)]
+
+        st.dataframe(
+            filtered.rename(columns={
+                "short_name":"Short Name", "indicator_code":"Code",
+                "indicator_name":"Full Name", "source_id":"Source", "unit":"Unit",
+                "country_count":"Countries", "coverage_start":"From", "coverage_end":"To"
+            }),
+            use_container_width=True, hide_index=True, height=600,
+        )
+
+# =====================================================================
+# 4. BROWSE BY SOURCE
+# =====================================================================
+elif section == "Browse by Source":
+    st.title("Browse by Source")
+
+    sources = q("""
+        SELECT s.source_id, s.source_name, s.institution, s.access_method, s.license, s.topics,
+               COALESCE(ic.n, 0) as indicators,
+               COALESCE(ir.rows, 0) as observations
+        FROM sources s
+        LEFT JOIN (SELECT source_id, count(*) as n FROM indicator_catalog GROUP BY source_id) ic ON ic.source_id = s.source_id
+        LEFT JOIN (SELECT source_id, count(*) as rows FROM indicators GROUP BY source_id) ir ON ir.source_id = s.source_id
+        ORDER BY observations DESC
+    """)
+
+    # Summary table
+    st.dataframe(
+        sources[["source_id","source_name","institution","indicators","observations","access_method","topics"]].rename(columns={
+            "source_id":"ID","source_name":"Name","institution":"Institution",
+            "indicators":"Indicators","observations":"Observations",
+            "access_method":"Access","topics":"Topics"
+        }),
+        use_container_width=True, hide_index=True, height=400,
+    )
+
+    # Drill into a source
+    st.markdown("---")
+    selected_source = st.selectbox("Select source to browse indicators",
+        sources[sources["indicators"]>0]["source_id"].tolist(),
+        format_func=lambda x: f"{x} — {sources[sources['source_id']==x]['source_name'].values[0]}")
+
+    if selected_source:
+        src_indicators = q(f"""
+            SELECT short_name, indicator_code, indicator_name, topic, unit,
+                   country_count, coverage_start, coverage_end
+            FROM indicator_catalog
+            WHERE source_id = '{selected_source}'
+            ORDER BY topic, indicator_code
+        """)
+        info = sources[sources["source_id"]==selected_source].iloc[0]
+        st.markdown(f"### {info['source_name']}")
+        st.caption(f"Institution: {info['institution']} | Access: {info['access_method']} | License: {info['license']}")
+        st.caption(f"Topics: {info['topics']}")
+
+        st.dataframe(
+            src_indicators.rename(columns={
+                "short_name":"Short Name","indicator_code":"Code","indicator_name":"Full Name",
+                "topic":"Topic","unit":"Unit","country_count":"Countries",
+                "coverage_start":"From","coverage_end":"To"
+            }),
+            use_container_width=True, hide_index=True, height=500,
+        )
+
+# =====================================================================
+# 5. BROWSE BY TAXONOMY
+# =====================================================================
+elif section == "Browse by Taxonomy":
+    st.title("GSI Topic Taxonomy")
+    st.caption("Global South Infrastructure taxonomy v30 — navigate the conceptual hierarchy")
+
+    tax = q("SELECT * FROM topic_taxonomy ORDER BY id")
+    l1 = tax[tax["level"]==1].sort_values("id")
+
+    topic_map = {'5.1':'macro','5.2':'trade','5.6':'finance','5.7':'labor',
+        '6.2':'health','6.3':'education','6.4':'social_protection','6.5':'gender',
+        '4.7':'inequality','4.1':'population','7.2':'agriculture','7.5':'environment',
+        '8.1':'energy','9.1':'military','3.2':'governance','6.7':'infrastructure','5.12':'commodities'}
+
+    for _, row in l1.iterrows():
+        l2 = tax[(tax["level"]==2) & (tax["parent_id"]==row["id"])].sort_values("id")
+        with st.expander(f"**{row['code']}. {row['name']}** ({row['name_es'] or ''}) — {len(l2)} subcategories"):
+            for _, sub in l2.iterrows():
+                topic = topic_map.get(sub["code"], "")
+                if topic:
+                    n = q1(f"SELECT count(*) FROM indicator_catalog WHERE topic='{topic}'")
+                    st.markdown(f"**`{sub['code']}`** {sub['name']} ({sub['name_es'] or ''}) — **{n:,} indicators** `[{topic}]`")
+                else:
+                    st.markdown(f"`{sub['code']}` {sub['name']} ({sub['name_es'] or ''}) — *pending data*")
+
+    st.markdown("---")
+    st.markdown("## Variable Cascade (DDI)")
+    st.markdown("""
+    Every indicator in DATA FORCES follows a three-tier chain:
+    1. **Concept** — abstract idea (e.g., "maternal mortality")
+    2. **Represented Variable** — measurement method (e.g., "deaths per 100K live births")
+    3. **Instance Variable** — concrete column in a specific source (e.g., `SH.STA.MMRT` in WB_WDI)
+    """)
+    cc1,cc2,cc3 = st.columns(3)
+    cc1.metric("Concepts", f"{q1('SELECT count(*) FROM concept'):,}")
+    cc2.metric("Represented Vars", f"{q1('SELECT count(*) FROM represented_variable'):,}")
+    cc3.metric("Instance Vars", f"{q1('SELECT count(*) FROM instance_variable'):,}")
+
+# =====================================================================
+# 6. COUNTRY DATA AVAILABILITY
+# =====================================================================
+elif section == "Country Data Availability":
+    st.title("Country Data Availability")
+
+    countries = q("SELECT * FROM countries ORDER BY country_name")
+    lab70 = countries[countries["in_lab70"]==True]
+
+    col1, col2 = st.columns([3,1])
+    with col2:
+        only_lab70 = st.checkbox("Lab70 only", True)
+    with col1:
+        pool = lab70 if only_lab70 else countries
+        sel = st.selectbox("Select country", pool["iso3"].tolist(),
+            format_func=lambda x: f"{pool[pool['iso3']==x]['country_name'].values[0]} ({x})")
+
+    if sel:
+        c = pool[pool["iso3"]==sel].iloc[0]
+        pos = c.get("structural_pos","")
+        st.markdown(f"### {c['country_name']} ({sel})")
+        st.caption(f"Region: {c['region']} | Income: {c['income_group']} | Position: {(pos or '').replace('_',' ').title()}")
+
+        # Data availability by topic
+        availability = q(f"""
+            SELECT ic.topic,
+                   count(DISTINCT i.indicator_code) as indicators_with_data,
+                   MIN(i.year) as from_year,
+                   MAX(i.year) as to_year,
+                   count(*) as total_obs
+            FROM indicators i
+            JOIN indicator_catalog ic ON i.indicator_code = ic.indicator_code AND i.source_id = ic.source_id
+            WHERE i.iso3 = '{sel}'
+            GROUP BY ic.topic
+            ORDER BY indicators_with_data DESC
+        """)
+
+        if len(availability) > 0:
+            st.markdown("## Data by topic")
+            st.dataframe(
+                availability.rename(columns={
+                    "topic":"Topic","indicators_with_data":"Indicators",
+                    "from_year":"From","to_year":"To","total_obs":"Observations"
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+            total_ind = availability["indicators_with_data"].sum()
+            total_obs = availability["total_obs"].sum()
+            st.caption(f"Total: {total_ind:,} unique indicators, {total_obs:,} observations")
+
+        # Data by source
+        by_source = q(f"""
+            SELECT source_id, count(DISTINCT indicator_code) as indicators, count(*) as obs,
+                   MIN(year) as from_year, MAX(year) as to_year
+            FROM indicators WHERE iso3 = '{sel}'
+            GROUP BY source_id ORDER BY obs DESC
+        """)
+        if len(by_source) > 0:
+            with st.expander(f"Data by source ({len(by_source)} sources)"):
+                st.dataframe(
+                    by_source.rename(columns={
+                        "source_id":"Source","indicators":"Indicators","obs":"Observations",
+                        "from_year":"From","to_year":"To"
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
+
+# =====================================================================
+# 7. ARGENTINA SUBNATIONAL
+# =====================================================================
+elif section == "Argentina Subnational":
+    st.title("Argentina — Subnational Data")
+
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Geographic units", f"{q1('SELECT count(*) FROM subnational_units'):,}")
+    c2.metric("Observations", f"{q1('SELECT count(*) FROM indicators_subnational'):,}")
+    c3.metric("Sources", q1("SELECT count(DISTINCT source_id) FROM indicators_subnational"))
+    c4.metric("Indicators", q1("SELECT count(DISTINCT indicator_code) FROM indicators_subnational"))
+
+    st.markdown("## Geographic Hierarchy")
+    hierarchy = q("""SELECT level, count(*) as units FROM subnational_units GROUP BY level
+        ORDER BY CASE level WHEN 'national' THEN 1 WHEN 'province' THEN 2
+        WHEN 'department' THEN 3 WHEN 'establishment' THEN 4 END""")
+    st.dataframe(hierarchy.rename(columns={"level":"Level","units":"Units"}),
+        use_container_width=True, hide_index=True)
+
+    st.markdown("## Available Indicators")
+    sub_inds = q("""SELECT DISTINCT indicator_code, indicator_name, source_id,
+        count(*) as obs, MIN(year) as from_year, MAX(year) as to_year
+        FROM indicators_subnational
+        GROUP BY indicator_code, indicator_name, source_id
+        ORDER BY obs DESC""")
+    st.dataframe(
+        sub_inds.rename(columns={
+            "indicator_code":"Code","indicator_name":"Name","source_id":"Source",
+            "obs":"Observations","from_year":"From","to_year":"To"
+        }),
+        use_container_width=True, hide_index=True, height=400,
+    )
+
+    st.markdown("## Provinces")
+    provs = q("SELECT unit_id, name, name_short, population FROM subnational_units WHERE level='province' ORDER BY population DESC")
+    st.dataframe(
+        provs.rename(columns={"unit_id":"Code","name":"Province","name_short":"Short","population":"Population (2022)"}),
+        use_container_width=True, hide_index=True,
+    )
+
+# =====================================================================
+# 8. DOCUMENTS & LEGISLATION
+# =====================================================================
+elif section == "Documents & Legislation":
+    st.title("Documents & Legislation")
+    ndocs = q1("SELECT count(*) FROM documents")
+    st.caption(f"{ndocs} documents cataloged")
+
+    docs = q("SELECT iso3, year, title, doc_type, tags, topics FROM documents ORDER BY iso3, year DESC")
+
+    if len(docs) > 0:
+        # Summary
+        by_country = q("SELECT iso3, count(*) as n FROM documents GROUP BY iso3 ORDER BY n DESC")
+        st.markdown("## By country")
+        st.dataframe(by_country.rename(columns={"iso3":"Country","n":"Documents"}),
+            use_container_width=True, hide_index=True)
+
+        # Filter and browse
+        st.markdown("## Browse")
+        countries_with_docs = sorted(docs["iso3"].dropna().unique())
+        sel = st.selectbox("Filter by country", ["All"] + countries_with_docs)
+        filtered = docs if sel == "All" else docs[docs["iso3"]==sel]
+
+        st.dataframe(
+            filtered.rename(columns={"iso3":"Country","year":"Year","title":"Title",
+                "doc_type":"Type","tags":"Tags","topics":"Topics"}),
+            use_container_width=True, hide_index=True, height=500,
+        )
+
+# =====================================================================
+# ANALYSIS: COUNTRY PROFILE
+# =====================================================================
+elif section == "Analysis: Country Profile":
+    st.title("Country Profile")
+    countries = q("SELECT * FROM countries WHERE in_lab70 ORDER BY country_name")
+
+    sel = st.selectbox("Country", countries["iso3"].tolist(),
+        format_func=lambda x: f"{countries[countries['iso3']==x]['country_name'].values[0]} ({x})")
+
+    if sel:
+        c = countries[countries["iso3"]==sel].iloc[0]
+        pos = c.get("structural_pos","")
+        color = P.get(pos, P["muted"])
+        st.markdown(f"### {c['country_name']} <span style='color:{color};font-size:.8rem'>{(pos or '').replace('_',' ').title()}</span>", unsafe_allow_html=True)
+
+        key_codes = ["NY.GDP.PCAP.CD","SP.DYN.LE00.IN","SH.STA.MMRT","EG.ELC.ACCS.ZS",
+                     "SL.UEM.TOTL.ZS","FP.CPI.TOTL.ZG","SE.SEC.ENRR","MS.MIL.XPND.GD.ZS"]
+        code_str = ",".join([f"'{c}'" for c in key_codes])
+        data = q(f"SELECT indicator_code, indicator_name, year, value FROM indicators WHERE iso3='{sel}' AND indicator_code IN ({code_str}) AND value IS NOT NULL ORDER BY year")
 
         if len(data) > 0:
-            for row_start in range(0, len(profiles), 4):
+            for i in range(0, len(key_codes), 4):
                 cols = st.columns(4)
-                for j, (code, label) in enumerate(profiles[row_start:row_start + 4]):
+                for j, code in enumerate(key_codes[i:i+4]):
                     with cols[j]:
-                        subset = data[data["indicator_code"] == code].sort_values("year")
-                        if len(subset) > 0:
-                            latest = subset.iloc[-1]
-                            val = latest["value"]
-                            val_str = f"{val:,.0f}" if abs(val) > 100 else f"{val:.1f}"
-                            st.metric(label, val_str, help=f"Year: {int(latest['year'])}")
-                            fig = px.area(subset, x="year", y="value")
-                            fig.update_layout(height=100, margin=dict(t=0, b=0, l=0, r=0),
-                                xaxis=dict(visible=False), yaxis=dict(visible=False), showlegend=False,
-                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                            fig.update_traces(fillcolor="rgba(0,212,170,0.15)", line_color=PALETTE["accent"])
+                        sub = data[data["indicator_code"]==code].sort_values("year")
+                        if len(sub) > 0:
+                            latest = sub.iloc[-1]
+                            v = latest["value"]
+                            vs = f"{v:,.0f}" if abs(v) > 100 else f"{v:.1f}"
+                            name = (latest["indicator_name"] or code)[:25]
+                            st.metric(name, vs, help=f"Year: {int(latest['year'])}")
+                            fig = px.area(sub, x="year", y="value")
+                            fig.update_layout(height=80, margin=dict(t=0,b=0,l=0,r=0),
+                                xaxis=dict(visible=False), yaxis=dict(visible=False),
+                                showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            fig.update_traces(fillcolor="rgba(0,212,170,0.12)", line_color=P["accent"])
                             st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.metric(label, "N/A")
 
-elif page == "Cross-Country":
+# =====================================================================
+# ANALYSIS: CROSS-COUNTRY
+# =====================================================================
+elif section == "Analysis: Cross-Country":
     st.title("Cross-Country Analysis")
-    countries = load_countries()
-    lab70 = countries[countries["in_lab70"] == True]
+    lab70 = q("SELECT * FROM countries WHERE in_lab70 ORDER BY country_name")
 
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        preset = st.selectbox("Preset", ["Custom"] + list(COUNTRY_PRESETS.keys()))
-    with c2:
-        default = COUNTRY_PRESETS.get(preset, ["ARG", "BRA", "CHN", "USA", "NGA"])
-        sel = st.multiselect("Countries", lab70["iso3"].tolist(),
+    presets = {"BRICS+":["BRA","RUS","IND","CHN","ZAF","ARG","EGY","ETH"],
+        "Latin America":["ARG","BRA","CHL","COL","MEX","PER","BOL","ECU"],
+        "Sub-Saharan Africa":["NGA","ETH","GHA","KEN","ZAF","TZA","UGA","SEN"],
+        "Core vs Periphery":["USA","DEU","JPN","SWE","NGA","ETH","MOZ","COD"]}
+
+    col1,col2 = st.columns([1,3])
+    with col1:
+        preset = st.selectbox("Preset", ["Custom"]+list(presets.keys()))
+    with col2:
+        default = presets.get(preset, ["ARG","BRA","CHN","USA","NGA"])
+        sel_countries = st.multiselect("Countries", lab70["iso3"].tolist(),
             default=[c for c in default if c in lab70["iso3"].tolist()],
-            format_func=lambda x: f"{x} - {lab70[lab70['iso3']==x]['country_name'].values[0]}")
+            format_func=lambda x: f"{x} — {lab70[lab70['iso3']==x]['country_name'].values[0]}")
 
-    popular = [("NY.GDP.PCAP.CD", "GDP per capita"), ("SP.DYN.LE00.IN", "Life expectancy"),
-               ("EG.ELC.ACCS.ZS", "Electricity access"), ("SL.UEM.TOTL.ZS", "Unemployment"),
-               ("FP.CPI.TOTL.ZG", "Inflation"), ("SI.POV.GINI", "Gini index"),
-               ("MS.MIL.XPND.GD.ZS", "Military (% GDP)"), ("IT.NET.USER.ZS", "Internet users")]
+    # Search indicator dynamically
+    ind_search = st.text_input("Search indicator", placeholder="GDP, life expectancy, electricity...")
+    if ind_search and len(ind_search) >= 2:
+        safe = ind_search.replace("'","''")
+        found = q(f"SELECT indicator_code, short_name, country_count FROM indicator_catalog WHERE (indicator_name ILIKE '%{safe}%' OR short_name ILIKE '%{safe}%') ORDER BY country_count DESC LIMIT 20")
+        if len(found) > 0:
+            ind = st.selectbox("Select", found["indicator_code"].tolist(),
+                format_func=lambda x: found[found["indicator_code"]==x]["short_name"].values[0])
+        else:
+            ind = None
+            st.warning("No indicator found.")
+    else:
+        ind = None
 
-    ind = st.selectbox("Indicator", [p[0] for p in popular],
-        format_func=lambda x: [p[1] for p in popular if p[0] == x][0])
+    yr = st.slider("Period", 1960, 2030, (2000, 2023))
 
-    yr = st.slider("Period", 1995, 2024, (2000, 2022))
+    if sel_countries and ind:
+        iso_str = ",".join([f"'{c}'" for c in sel_countries])
+        data = q(f"SELECT iso3,year,indicator_code,indicator_name,value FROM indicators WHERE indicator_code='{ind}' AND iso3 IN ({iso_str}) AND year>={yr[0]} AND year<={yr[1]} AND value IS NOT NULL ORDER BY year")
 
-    if sel and ind:
-        data = get_data(sel, [ind], yr[0], yr[1])
         if len(data) > 0:
-            data = data.merge(countries[["iso3", "country_name", "structural_pos"]], on="iso3", how="left")
             name = data["indicator_name"].iloc[0] or ind
-
             fig = px.line(data, x="year", y="value", color="iso3",
-                hover_data=["country_name"],
-                color_discrete_sequence=PLOTLY_TEMPLATE["layout"]["colorway"])
-            fig.update_layout(height=450, margin=dict(t=30, b=40),
-                title=name, legend=dict(orientation="h", y=-0.12, font=dict(size=10)),
-                xaxis_title="", yaxis_title="",
-                **{k: v for k, v in PLOTLY_TEMPLATE["layout"].items() if k not in ["colorway"]})
+                color_discrete_sequence=COLORS)
+            fig.update_layout(height=450, title=name, margin=dict(t=40,b=30,l=50,r=10),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color=P["text"],family="Inter"),
+                xaxis=dict(gridcolor=P["card"],title=""), yaxis=dict(gridcolor=P["card"],title=""),
+                legend=dict(orientation="h",y=-0.12,font=dict(size=10)))
             st.plotly_chart(fig, use_container_width=True)
 
-            # Bar chart latest
-            latest = data.sort_values("year", ascending=False).drop_duplicates("iso3").sort_values("value", ascending=False)
-            fig2 = px.bar(latest, x="country_name", y="value", color="structural_pos",
-                color_discrete_map=PALETTE, title="Latest values")
-            fig2.update_layout(height=300, margin=dict(t=40, b=40),
-                xaxis_title="", showlegend=True, legend_title="",
-                **{k: v for k, v in PLOTLY_TEMPLATE["layout"].items() if k not in ["colorway"]})
-            st.plotly_chart(fig2, use_container_width=True)
+            with st.expander("Data table"):
+                pivot = data.pivot_table(index="year", columns="iso3", values="value")
+                st.dataframe(pivot, use_container_width=True)
 
-elif page == "Sources":
-    st.title("Source Registry")
-    st.caption("48 sources cataloged, 39 loaded with data")
-    sources = load_sources()
-
-    for inst in sorted(sources["institution"].dropna().unique()):
-        inst_src = sources[sources["institution"] == inst]
-        with st.expander(f"**{inst}** ({len(inst_src)} sources)"):
-            for _, s in inst_src.iterrows():
-                topics = (s.get("topics") or "").split(",")
-                badges = " ".join([f'<span class="badge">{t.strip()}</span>' for t in topics if t.strip()])
-                st.markdown(f"**`{s['source_id']}`** {s['source_name']}<br>{badges}",
-                    unsafe_allow_html=True)
-
-elif page == "About":
-    st.title("About DATA FORCES")
-    st.markdown(f"""
-    **DATA FORCES** is an open, SQL-native research data infrastructure containing
-    **98,651,403 observations** from **39 international data sources**, covering
-    **217 countries** across **22,576 indicators classified into 16 thematic domains**.
-
-    Every observation carries a `value_type` flag distinguishing observed data (96.4%),
-    projections (3.6%), and historical estimates (0.02%).
-
-    The system implements the **DDI Variable Cascade**: 15,543 concepts linked to
-    22,576 represented variables and instance variables, all organized under the
-    **GSI taxonomy** (11 Level-1 categories, 64 Level-2 subcategories).
-
-    ---
-
-    **Citation:** Lopez, E. (2026). *DATA FORCES: Productive Data Infrastructure
-    for Global South Research.* Dependency Lab, Tricontinental Institute for Social
-    Research / IdIHCS-UNLP/CONICET.
-
-    **Links:**
-    - [Full dataset (HuggingFace)](https://huggingface.co/datasets/emilop1982/dataforces)
-    - [Cloud database (Supabase)](https://gpndcspvuewxrkefqewc.supabase.co)
-    - Technical documentation: DF_Documentation_v2.md
-    """)
+elif section == "---":
+    pass
